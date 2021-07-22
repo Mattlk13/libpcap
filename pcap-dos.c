@@ -153,7 +153,7 @@ pcap_t *pcap_create_interface (const char *device _U_, char *ebuf)
 {
 	pcap_t *p;
 
-	p = pcap_create_common(ebuf, sizeof (struct pcap_dos));
+	p = PCAP_CREATE_COMMON(ebuf, struct pcap_dos);
 	if (p == NULL)
 		return (NULL);
 
@@ -698,7 +698,7 @@ open_driver (const char *dev_name, char *ebuf, int promisc)
       return (NULL);
     }
 
-    /* Some devices need this to operate in promiscous mode
+    /* Some devices need this to operate in promiscuous mode
      */
     if (promisc && dev->set_multicast_list)
        (*dev->set_multicast_list) (dev);
@@ -943,7 +943,7 @@ static void pcap_init_hook (void)
 }
 
 /*
- * Supress PRINT message from Watt-32's sock_init()
+ * Suppress PRINT message from Watt-32's sock_init()
  */
 static void null_print (void) {}
 
@@ -1031,11 +1031,9 @@ static int init_watt32 (struct pcap *pcap, const char *dev_name, char *err_buf)
   pcap_save.linktype       = _eth_get_hwtype (NULL, NULL);
   pcap_save.snapshot       = MTU > 0 ? MTU : ETH_MAX; /* assume 1514 */
 
-#if 1
   /* prevent use of resolve() and resolve_ip()
    */
   last_nameserver = 0;
-#endif
   return (1);
 }
 

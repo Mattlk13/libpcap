@@ -33,6 +33,7 @@
 #endif
 
 #include "pcap-int.h"
+#include "diag-control.h"
 
 #ifdef NEED_STRERROR_H
 #include "strerror.h"
@@ -56,13 +57,13 @@
 #include <linux/netfilter/nfnetlink_log.h>
 #include <linux/netfilter/nfnetlink_queue.h>
 
-/* NOTE: if your program drops privilages after pcap_activate() it WON'T work with nfqueue.
+/* NOTE: if your program drops privileges after pcap_activate() it WON'T work with nfqueue.
  *       It took me quite some time to debug ;/
  *
- *       Sending any data to nfnetlink socket requires CAP_NET_ADMIN privilages,
+ *       Sending any data to nfnetlink socket requires CAP_NET_ADMIN privileges,
  *       and in nfqueue we need to send verdict reply after recving packet.
  *
- *       In tcpdump you can disable dropping privilages with -Z root
+ *       In tcpdump you can disable dropping privileges with -Z root
  */
 
 #include "pcap-netfilter-linux.h"
@@ -159,7 +160,18 @@ netfilter_read_linux(pcap_t *handle, int max_packets, pcap_handler callback, u_c
 			} else
 				return count;
 		}
-		if (ep - bp < NLMSG_SPACE(0)) {
+		/*
+		 * NLMSG_SPACE(0) might be signed or might be unsigned,
+		 * depending on whether the kernel defines NLMSG_ALIGNTO
+		 * as 4, which older kernels do, or as 4U, which newer
+		 * kernels do.
+		 *
+		 * ep - bp is of type ptrdiff_t, which is signed.
+		 *
+		 * To squelch warnings, we cast both to size_t, which
+		 * is unsigned; ep >= bp, so the cast is safe.
+		 */
+		if ((size_t)(ep - bp) < (size_t)NLMSG_SPACE(0)) {
 			/*
 			 * There's less than one netlink message left
 			 * in the buffer.  Give up.
@@ -262,8 +274,15 @@ netfilter_read_linux(pcap_t *handle, int max_packets, pcap_handler callback, u_c
 		 * If the message length would run past the end of the
 		 * buffer, truncate it to the remaining space in the
 		 * buffer.
+		 *
+		 * To squelch warnings, we cast ep - bp to uint32_t, which
+		 * is unsigned and is the type of msg_len; ep >= bp, and
+		 * len should fit in 32 bits (either it's set from an int
+		 * or it's set from a recv() call with a buffer size that's
+		 * an int, and we're assuming either ILP32 or LP64), so
+		 * the cast is safe.
 		 */
-		if (msg_len > ep - bp)
+		if (msg_len > (uint32_t)(ep - bp))
 			msg_len = (uint32_t)(ep - bp);
 
 		bp += msg_len;
@@ -325,7 +344,9 @@ netfilter_send_config_msg(const pcap_t *handle, uint16_t msg_type, int ack, u_in
 	static unsigned int seq_id;
 
 	if (!seq_id)
+DIAG_OFF_NARROWING
 		seq_id = time(NULL);
+DIAG_ON_NARROWING
 	++seq_id;
 
 	nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nfgenmsg));
@@ -620,7 +641,7 @@ netfilter_activate(pcap_t* handle)
 			if (nflog_send_config_cmd(handle, groups[i], NFULNL_CFG_CMD_BIND, AF_UNSPEC) < 0) {
 				pcap_fmt_errmsg_for_errno(handle->errbuf,
 				    PCAP_ERRBUF_SIZE, errno,
-				    "Can't listen on group group index");
+				    "Can't listen on group index");
 				goto close_fail;
 			}
 
@@ -650,7 +671,7 @@ netfilter_activate(pcap_t* handle)
 			if (nfqueue_send_config_cmd(handle, groups[i], NFQNL_CFG_CMD_BIND, AF_UNSPEC) < 0) {
 				pcap_fmt_errmsg_for_errno(handle->errbuf,
 				    PCAP_ERRBUF_SIZE, errno,
-				    "Can't listen on group group index");
+				    "Can't listen on group index");
 				goto close_fail;
 			}
 
@@ -725,7 +746,7 @@ netfilter_create(const char *device, char *ebuf, int *is_ours)
 	/* OK, it's probably ours. */
 	*is_ours = 1;
 
-	p = pcap_create_common(ebuf, sizeof (struct pcap_netfilter));
+	p = PCAP_CREATE_COMMON(ebuf, struct pcap_netfilter);
 	if (p == NULL)
 		return (NULL);
 

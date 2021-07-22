@@ -368,7 +368,11 @@ rdmasniff_create(const char *device, char *ebuf, int *is_ours)
 	*is_ours = 0;
 
 	dev_list = ibv_get_device_list(&numdev);
-	if (!dev_list || !numdev) {
+	if (!dev_list) {
+		return NULL;
+	}
+	if (!numdev) {
+		ibv_free_device_list(dev_list);
 		return NULL;
 	}
 
@@ -391,7 +395,7 @@ rdmasniff_create(const char *device, char *ebuf, int *is_ours)
 		    !strncmp(device, dev_list[i]->name, namelen)) {
 			*is_ours = 1;
 
-			p = pcap_create_common(ebuf, sizeof (struct pcap_rdmasniff));
+			p = PCAP_CREATE_COMMON(ebuf, struct pcap_rdmasniff);
 			if (p) {
 				p->activate_op = rdmasniff_activate;
 				priv = p->priv;
@@ -415,7 +419,7 @@ rdmasniff_findalldevs(pcap_if_list_t *devlistp, char *err_str)
 	int ret = 0;
 
 	dev_list = ibv_get_device_list(&numdev);
-	if (!dev_list || !numdev) {
+	if (!dev_list) {
 		return 0;
 	}
 
@@ -426,11 +430,10 @@ rdmasniff_findalldevs(pcap_if_list_t *devlistp, char *err_str)
 		 */
 		if (!add_dev(devlistp, dev_list[i]->name, 0, "RDMA sniffer", err_str)) {
 			ret = -1;
-			goto out;
+			break;
 		}
 	}
 
-out:
 	ibv_free_device_list(dev_list);
 	return ret;
 }

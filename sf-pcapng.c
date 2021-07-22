@@ -85,7 +85,7 @@ struct option_header {
  * Section Header Block.
  */
 #define BT_SHB			0x0A0D0D0A
-
+#define BT_SHB_INSANE_MAX       1024U*1024U*1U  /* 1MB should be enough */
 struct section_header_block {
 	bpf_u_int32	byte_order_magic;
 	u_short		major_version;
@@ -101,7 +101,8 @@ struct section_header_block {
 
 /*
  * Current version number.  If major_version isn't PCAP_NG_VERSION_MAJOR,
- * that means that this code can't read the file.
+ * or if minor_version isn't PCAP_NG_VERSION_MINOR or 2, that means that
+ * this code can't read the file.
  */
 #define PCAP_NG_VERSION_MAJOR	1
 #define PCAP_NG_VERSION_MINOR	0
@@ -197,6 +198,7 @@ typedef enum {
  * Per-interface information.
  */
 struct pcap_ng_if {
+	uint32_t snaplen;		/* snapshot length */
 	uint64_t tsresol;		/* time stamp resolution */
 	tstamp_scale_type_t scale_type;	/* how to scale */
 	uint64_t scale_factor;		/* time stamp scale factor for power-of-10 tsresol */
@@ -266,7 +268,7 @@ read_bytes(FILE *fp, void *buf, size_t bytes_to_read, int fail_on_eof,
 			if (amt_read == 0 && !fail_on_eof)
 				return (0);	/* EOF */
 			snprintf(errbuf, PCAP_ERRBUF_SIZE,
-			    "truncated dump file; tried to read %zu bytes, only got %zu",
+			    "truncated pcapng dump file; tried to read %zu bytes, only got %zu",
 			    bytes_to_read, amt_read);
 		}
 		return (-1);
@@ -587,7 +589,8 @@ done:
 }
 
 static int
-add_interface(pcap_t *p, struct block_cursor *cursor, char *errbuf)
+add_interface(pcap_t *p, struct interface_description_block *idbp,
+    struct block_cursor *cursor, char *errbuf)
 {
 	struct pcap_ng_sf *ps;
 	uint64_t tsresol;
@@ -695,6 +698,8 @@ add_interface(pcap_t *p, struct block_cursor *cursor, char *errbuf)
 		ps->ifaces_size = new_ifaces_size;
 		ps->ifaces = new_ifaces;
 	}
+
+	ps->ifaces[ps->ifcount - 1].snaplen = idbp->snaplen;
 
 	/*
 	 * Set the default time stamp resolution and offset.
@@ -856,22 +861,14 @@ pcap_ng_check_header(const uint8_t *magic, FILE *fp, u_int precision,
 	/*
 	 * Check the sanity of the total length.
 	 */
-	if (total_length < sizeof(*bhdrp) + sizeof(*shbp) + sizeof(struct block_trailer)) {
+	if (total_length < sizeof(*bhdrp) + sizeof(*shbp) + sizeof(struct block_trailer) ||
+            (total_length > BT_SHB_INSANE_MAX)) {
 		snprintf(errbuf, PCAP_ERRBUF_SIZE,
-		    "Section Header Block in pcapng dump file has a length of %u < %zu",
+		    "Section Header Block in pcapng dump file has invalid length %zu < _%u_ < %u (BT_SHB_INSANE_MAX)",
+		    sizeof(*bhdrp) + sizeof(*shbp) + sizeof(struct block_trailer),
 		    total_length,
-		    sizeof(*bhdrp) + sizeof(*shbp) + sizeof(struct block_trailer));
-		*err = 1;
-		return (NULL);
-	}
+		    BT_SHB_INSANE_MAX);
 
-	/*
-	 * Make sure it's not too big.
-	 */
-	if (total_length > INITIAL_MAX_BLOCKSIZE) {
-		snprintf(errbuf, PCAP_ERRBUF_SIZE,
-		    "pcapng block size %u > maximum %u",
-		    total_length, INITIAL_MAX_BLOCKSIZE);
 		*err = 1;
 		return (NULL);
 	}
@@ -880,7 +877,7 @@ pcap_ng_check_header(const uint8_t *magic, FILE *fp, u_int precision,
 	 * OK, this is a good pcapng file.
 	 * Allocate a pcap_t for it.
 	 */
-	p = pcap_open_offline_common(errbuf, sizeof (struct pcap_ng_sf));
+	p = PCAP_OPEN_OFFLINE_COMMON(errbuf, struct pcap_ng_sf);
 	if (p == NULL) {
 		/* Allocation failed. */
 		*err = 1;
@@ -966,9 +963,23 @@ pcap_ng_check_header(const uint8_t *magic, FILE *fp, u_int precision,
 		 * XXX - we don't care about the section length.
 		 */
 	}
-	/* currently only SHB version 1.0 is supported */
+	/* Currently only SHB versions 1.0 and 1.2 are supported;
+	   version 1.2 is treated as being the same as version 1.0.
+	   See the current version of the pcapng specification.
+
+	   Version 1.2 is written by some programs that write additional
+	   block types (which can be read by any code that handles them,
+	   regardless of whether the minor version if 0 or 2, so that's
+	   not a reason to change the minor version number).
+
+	   XXX - the pcapng specification says that readers should
+	   just ignore sections with an unsupported version number;
+	   presumably they can also report an error if they skip
+	   all the way to the end of the file without finding
+	   any versions that they support. */
 	if (! (shbp->major_version == PCAP_NG_VERSION_MAJOR &&
-	       shbp->minor_version == PCAP_NG_VERSION_MINOR)) {
+	       (shbp->minor_version == PCAP_NG_VERSION_MINOR ||
+	        shbp->minor_version == 2))) {
 		snprintf(errbuf, PCAP_ERRBUF_SIZE,
 		    "unsupported pcapng savefile version %u.%u",
 		    shbp->major_version, shbp->minor_version);
@@ -1021,7 +1032,7 @@ pcap_ng_check_header(const uint8_t *magic, FILE *fp, u_int precision,
 			/*
 			 * Try to add this interface.
 			 */
-			if (!add_interface(p, &cursor, errbuf))
+			if (!add_interface(p, idbp, &cursor, errbuf))
 				goto fail;
 
 			goto done;
@@ -1251,7 +1262,7 @@ pcap_ng_next_packet(pcap_t *p, struct pcap_pkthdr *hdr, u_char **data)
 			if ((bpf_u_int32)p->snapshot !=
 			    pcap_adjust_snapshot(p->linktype, idbp->snaplen)) {
 				snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
-				    "an interface has a snapshot length %u different from the type of the first interface",
+				    "an interface has a snapshot length %u different from the snapshot length of the first interface",
 				    idbp->snaplen);
 				return (-1);
 			}
@@ -1259,7 +1270,7 @@ pcap_ng_next_packet(pcap_t *p, struct pcap_pkthdr *hdr, u_char **data)
 			/*
 			 * Try to add this interface.
 			 */
-			if (!add_interface(p, &cursor, p->errbuf))
+			if (!add_interface(p, idbp, &cursor, p->errbuf))
 				return (-1);
 			break;
 

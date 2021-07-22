@@ -173,7 +173,7 @@ bt_create(const char *device, char *ebuf, int *is_ours)
 	/* OK, it's probably ours. */
 	*is_ours = 1;
 
-	p = pcap_create_common(ebuf, sizeof (struct pcap_bt));
+	p = PCAP_CREATE_COMMON(ebuf, struct pcap_bt);
 	if (p == NULL)
 		return (NULL);
 
@@ -341,6 +341,10 @@ bt_read_linux(pcap_t *handle, int max_packets _U_, pcap_handler callback, u_char
 	} while ((ret == -1) && (errno == EINTR));
 
 	if (ret < 0) {
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			/* Nonblocking mode, no data */
+			return 0;
+		}
 		pcap_fmt_errmsg_for_errno(handle->errbuf, PCAP_ERRBUF_SIZE,
 		    errno, "Can't receive packet");
 		return -1;
@@ -362,9 +366,21 @@ bt_read_linux(pcap_t *handle, int max_packets _U_, pcap_handler callback, u_char
 		}
 		cmsg = CMSG_NXTHDR(&msg, cmsg);
 	}
-	if ((in && (handle->direction == PCAP_D_OUT)) ||
-				((!in) && (handle->direction == PCAP_D_IN)))
-		return 0;
+	switch (handle->direction) {
+
+	case PCAP_D_IN:
+		if (!in)
+			return 0;
+		break;
+
+	case PCAP_D_OUT:
+		if (in)
+			return 0;
+		break;
+
+	default:
+		break;
+	}
 
 	bthdr->direction = htonl(in != 0);
 	pkth.caplen+=sizeof(pcap_bluetooth_h4_header);
@@ -418,6 +434,10 @@ bt_stats_linux(pcap_t *handle, struct pcap_stat *stats)
 static int
 bt_setdirection_linux(pcap_t *p, pcap_direction_t d)
 {
+	/*
+	 * It's guaranteed, at this point, that d is a valid
+	 * direction value.
+	 */
 	p->direction = d;
 	return 0;
 }

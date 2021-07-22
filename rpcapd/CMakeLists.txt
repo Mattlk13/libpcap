@@ -50,6 +50,7 @@ if(WIN32 OR ((CMAKE_USE_PTHREADS_INIT OR PTHREADS_FOUND) AND HAVE_CRYPT))
   if(WIN32)
     set(RPCAPD_EXTRA_SOURCES
         win32-svc.c
+        ${pcap_SOURCE_DIR}/charconv.c
         ${pcap_SOURCE_DIR}/missing/getopt.c
         rpcapd.rc)
     include_directories(${pcap_SOURCE_DIR}/rpcapd ${pcap_SOURCE_DIR}/missing)
@@ -134,11 +135,28 @@ if(WIN32 OR ((CMAKE_USE_PTHREADS_INIT OR PTHREADS_FOUND) AND HAVE_CRYPT))
 
   set(MANFILE_EXPAND rpcapd-config.manfile.in)
 
-  if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-    install(TARGETS rpcapd DESTINATION bin/amd64)
-  else(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-    install(TARGETS rpcapd DESTINATION bin)
-  endif(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+  if(WIN32)
+    #
+    # XXX - where should the install target put rpcapd on Windows?
+    #
+    # Note that if an installer package is being produced
+    # from the results of the build, the installer package
+    # will determine where it goes.
+    #
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      install(TARGETS rpcapd DESTINATION bin/amd64)
+    else(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      install(TARGETS rpcapd DESTINATION bin)
+    endif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+  else(WIN32)
+    #
+    # On UN*X, we put it in the sbin directory.
+    #
+    # XXX - the Linux Filesystem Hierarchy Standard says /usr/sbin
+    # is for daemons, but some other systems use /usr/libexec instead.
+    #
+    install(TARGETS rpcapd DESTINATION sbin)
+  endif(WIN32)
 
   # On UN*X, and on Windows when not using MSVC, generate process man
   # pages and arrange that they be installed.

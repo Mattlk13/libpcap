@@ -240,7 +240,7 @@ pcap_check_header(const uint8_t *magic, FILE *fp, u_int precision, char *errbuf,
 	 * OK, this is a good pcap file.
 	 * Allocate a pcap_t for it.
 	 */
-	p = pcap_open_offline_common(errbuf, sizeof (struct pcap_sf));
+	p = PCAP_OPEN_OFFLINE_COMMON(errbuf, struct pcap_sf);
 	if (p == NULL) {
 		/* Allocation failed. */
 		*err = 1;
@@ -291,7 +291,7 @@ pcap_check_header(const uint8_t *magic, FILE *fp, u_int precision, char *errbuf,
 			ps->scale_type = PASS_THROUGH;
 		} else {
 			/*
-			 * The file has microoseconds, the user
+			 * The file has microseconds, the user
 			 * wants nanoseconds; scale the
 			 * precision up.
 			 */
@@ -672,7 +672,7 @@ pcap_next_packet(pcap_t *p, struct pcap_pkthdr *hdr, u_char **data)
 
 			new_bufsize = hdr->caplen;
 			/*
-			 * http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
+			 * https://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
 			 */
 			new_bufsize--;
 			new_bufsize |= new_bufsize >> 1;
@@ -831,7 +831,7 @@ pcap_dump_open(pcap_t *p, const char *fname)
 		 * required on Windows, as the file is a binary file
 		 * and must be written in binary mode.
 		 */
-		f = fopen(fname, "wb");
+		f = charset_fopen(fname, "wb");
 		if (f == NULL) {
 			pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
 			    errno, "%s", fname);
@@ -931,7 +931,7 @@ pcap_dump_open_append(pcap_t *p, const char *fname)
 	 * even though it does nothing.  It's required on Windows, as the
 	 * file is a binary file and must be read in binary mode.
 	 */
-	f = fopen(fname, "ab+");
+	f = charset_fopen(fname, "ab+");
 	if (f == NULL) {
 		pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
 		    errno, "%s", fname);

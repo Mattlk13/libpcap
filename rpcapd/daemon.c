@@ -197,6 +197,19 @@ struct tls_alert {
 #define TLS_ALERT_LEVEL_FATAL		2
 #define TLS_ALERT_HANDSHAKE_FAILURE	40
 
+static int is_url(const char *source);
+
+/*
+ * Maximum sizes for fixed-bit-width values.
+ */
+#ifndef UINT16_MAX
+#define UINT16_MAX	65535U
+#endif
+
+#ifndef UINT32_MAX
+#define UINT32_MAX	4294967295U
+#endif
+
 int
 daemon_serviceloop(SOCKET sockctrl, int isactive, char *passiveClients,
     int nullAuthAllowed, int uses_ssl)
@@ -362,7 +375,7 @@ daemon_serviceloop(SOCKET sockctrl, int isactive, char *passiveClients,
 				// Immediate EOF
 				goto end;
 			}
-			plen = (tls_header.length_hi << 8) | tls_header.length_lo;
+			plen = (tls_header.length_hi << 8U) | tls_header.length_lo;
 
 			// Discard the rest of the message.
 			if (rpcapd_discard(sockctrl, NULL, plen) == -1)
@@ -382,7 +395,7 @@ daemon_serviceloop(SOCKET sockctrl, int isactive, char *passiveClients,
 			if (sock_send(sockctrl, NULL, (char *) &tls_header,
 			    TLS_RECORD_HEADER_LEN, errbuf, PCAP_ERRBUF_SIZE) == -1)
 			{
-				// That failed; log a messsage and give up.
+				// That failed; log a message and give up.
 				rpcapd_log(LOGPRIO_ERROR, "Send to client failed: %s", errbuf);
 				goto end;
 			}
@@ -392,7 +405,7 @@ daemon_serviceloop(SOCKET sockctrl, int isactive, char *passiveClients,
 			if (sock_send(sockctrl, NULL, (char *) &tls_alert,
 			    TLS_ALERT_LEN, errbuf, PCAP_ERRBUF_SIZE) == -1)
 			{
-				// That failed; log a messsage and give up.
+				// That failed; log a message and give up.
 				rpcapd_log(LOGPRIO_ERROR, "Send to client failed: %s", errbuf);
 				goto end;
 			}
@@ -734,7 +747,7 @@ daemon_serviceloop(SOCKET sockctrl, int isactive, char *passiveClients,
 		//
 		// Be carefully: the capture can have been started, but an error occurred (so session != NULL, but
 		//  sockdata is 0
-		if ((!pars.isactive) &&  ((session == NULL) || ((session != NULL) && (session->sockdata == 0))))
+		if ((!pars.isactive) && (session == NULL || session->sockdata == 0))
 		{
 			// Check for the initial timeout
 			FD_ZERO(&rfds);
@@ -743,8 +756,11 @@ daemon_serviceloop(SOCKET sockctrl, int isactive, char *passiveClients,
 			tv.tv_usec = 0;
 
 			FD_SET(pars.sockctrl, &rfds);
-
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+			retval = 1;
+#else
 			retval = select((int)pars.sockctrl + 1, &rfds, NULL, NULL, &tv);
+#endif
 			if (retval == -1)
 			{
 				sock_geterror("select() failed", errmsgbuf, PCAP_ERRBUF_SIZE);
@@ -1092,6 +1108,9 @@ end:
 		session = NULL;
 	}
 
+	if (passiveClients) {
+		free(passiveClients);
+	}
 	//
 	// Finish using the SSL handle for the control socket, if we
 	// have an SSL connection, and close the control socket.
@@ -1358,7 +1377,7 @@ daemon_msg_auth_req(struct daemon_slpars *pars, uint32 plen)
 	// Send the reply.
 	if (sock_send(pars->sockctrl, pars->ssl, sendbuf, sendbufidx, errbuf, PCAP_ERRBUF_SIZE) == -1)
 	{
-		// That failed; log a messsage and give up.
+		// That failed; log a message and give up.
 		rpcapd_log(LOGPRIO_ERROR, "Send to client failed: %s", errbuf);
 		return -1;
 	}
@@ -1412,11 +1431,22 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
 	 * stop trying to log in with a given user name and move on
 	 * to another user name.
 	 */
+	DWORD error;
 	HANDLE Token;
+	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to log
+
 	if (LogonUser(username, ".", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, &Token) == 0)
 	{
-		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
-		    GetLastError(), "LogonUser() failed");
+		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed");
+		error = GetLastError();
+		if (error != ERROR_LOGON_FAILURE)
+		{
+			// Some error other than an authentication error;
+			// log it.
+			pcap_fmt_errmsg_for_win32_err(errmsgbuf,
+			    PCAP_ERRBUF_SIZE, error, "LogonUser() failed");
+			rpcapd_log(LOGPRIO_ERROR, "%s", errmsgbuf);
+		}
 		return -1;
 	}
 
@@ -1424,8 +1454,10 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
 	// I didn't test it.
 	if (ImpersonateLoggedOnUser(Token) == 0)
 	{
-		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed");
+		pcap_fmt_errmsg_for_win32_err(errmsgbuf, PCAP_ERRBUF_SIZE,
 		    GetLastError(), "ImpersonateLoggedOnUser() failed");
+		rpcapd_log(LOGPRIO_ERROR, "%s", errmsgbuf);
 		CloseHandle(Token);
 		return -1;
 	}
@@ -1437,7 +1469,7 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
 	/*
 	 * See
 	 *
-	 *	http://www.unixpapa.com/incnote/passwd.html
+	 *	https://www.unixpapa.com/incnote/passwd.html
 	 *
 	 * We use the Solaris/Linux shadow password authentication if
 	 * we have getspnam(), otherwise we just do traditional
@@ -1453,16 +1485,18 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
 	 * only password database or some other authentication mechanism,
 	 * behind its API.
 	 */
+	int error;
 	struct passwd *user;
 	char *user_password;
 #ifdef HAVE_GETSPNAM
 	struct spwd *usersp;
 #endif
+	char *crypt_password;
 
 	// This call is needed to get the uid
 	if ((user = getpwnam(username)) == NULL)
 	{
-		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed: user name or password incorrect");
+		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed");
 		return -1;
 	}
 
@@ -1470,7 +1504,7 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
 	// This call is needed to get the password; otherwise 'x' is returned
 	if ((usersp = getspnam(username)) == NULL)
 	{
-		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed: user name or password incorrect");
+		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed");
 		return -1;
 	}
 	user_password = usersp->sp_pwdp;
@@ -1488,23 +1522,52 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
 	user_password = user->pw_passwd;
 #endif
 
-	if (strcmp(user_password, (char *) crypt(password, user_password)) != 0)
+	//
+	// The Single UNIX Specification says that if crypt() fails it
+	// sets errno, but some implementatons that haven't been run
+	// through the SUS test suite might not do so.
+	//
+	errno = 0;
+	crypt_password = crypt(password, user_password);
+	if (crypt_password == NULL)
 	{
-		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed: user name or password incorrect");
+		error = errno;
+		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed");
+		if (error == 0)
+		{
+			// It didn't set errno.
+			rpcapd_log(LOGPRIO_ERROR, "crypt() failed");
+		}
+		else
+		{
+			rpcapd_log(LOGPRIO_ERROR, "crypt() failed: %s",
+			    strerror(error));
+		}
+		return -1;
+	}
+	if (strcmp(user_password, crypt_password) != 0)
+	{
+		snprintf(errbuf, PCAP_ERRBUF_SIZE, "Authentication failed");
 		return -1;
 	}
 
 	if (setuid(user->pw_uid))
 	{
+		error = errno;
 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
-		    errno, "setuid");
+		    error, "setuid");
+		rpcapd_log(LOGPRIO_ERROR, "setuid() failed: %s",
+		    strerror(error));
 		return -1;
 	}
 
 /*	if (setgid(user->pw_gid))
 	{
+		error = errno;
 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
 		    errno, "setgid");
+		rpcapd_log(LOGPRIO_ERROR, "setgid() failed: %s",
+		    strerror(error));
 		return -1;
 	}
 */
@@ -1513,6 +1576,21 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
 #endif
 
 }
+
+/*
+ * Make sure that the reply length won't overflow 32 bits if we add the
+ * specified amount to it.  If it won't, add that amount to it.
+ *
+ * We check whether replylen + itemlen > UINT32_MAX, but subtract itemlen
+ * from both sides, to prevent overflow.
+ */
+#define CHECK_AND_INCREASE_REPLY_LEN(itemlen) \
+	if (replylen > UINT32_MAX - (itemlen)) { \
+		pcap_strlcpy(errmsgbuf, "Reply length doesn't fit in 32 bits", \
+		    sizeof (errmsgbuf)); \
+		goto error; \
+	} \
+	replylen += (uint32)(itemlen)
 
 static int
 daemon_msg_findallif_req(uint8 ver, struct daemon_slpars *pars, uint32 plen)
@@ -1525,6 +1603,7 @@ daemon_msg_findallif_req(uint8 ver, struct daemon_slpars *pars, uint32 plen)
 	pcap_if_t *d;				// temp pointer needed to scan the interface chain
 	struct pcap_addr *address;		// pcap structure that keeps a network address of an interface
 	struct rpcap_findalldevs_if *findalldevs_if;// rpcap structure that packet all the data of an interface together
+	uint32 replylen;			// length of reply payload
 	uint16 nif = 0;				// counts the number of interface listed
 
 	// Discard the rest of the message; there shouldn't be any payload.
@@ -1552,18 +1631,37 @@ daemon_msg_findallif_req(uint8 ver, struct daemon_slpars *pars, uint32 plen)
 		return 0;
 	}
 
-	// checks the number of interfaces and it computes the total length of the payload
+	// This checks the number of interfaces and computes the total
+	// length of the payload.
+	replylen = 0;
 	for (d = alldevs; d != NULL; d = d->next)
 	{
 		nif++;
 
-		if (d->description)
-			plen+= strlen(d->description);
-		if (d->name)
-			plen+= strlen(d->name);
+		if (d->description) {
+			size_t stringlen = strlen(d->description);
+			if (stringlen > UINT16_MAX) {
+				pcap_strlcpy(errmsgbuf,
+				    "Description length doesn't fit in 16 bits",
+				    sizeof (errmsgbuf));
+				goto error;
+			}
+			CHECK_AND_INCREASE_REPLY_LEN(stringlen);
+		}
+		if (d->name) {
+			size_t stringlen = strlen(d->name);
+			if (stringlen > UINT16_MAX) {
+				pcap_strlcpy(errmsgbuf,
+				    "Name length doesn't fit in 16 bits",
+				    sizeof (errmsgbuf));
+				goto error;
+			}
+			CHECK_AND_INCREASE_REPLY_LEN(stringlen);
+		}
 
-		plen+= sizeof(struct rpcap_findalldevs_if);
+		CHECK_AND_INCREASE_REPLY_LEN(sizeof(struct rpcap_findalldevs_if));
 
+		uint16_t naddrs = 0;
 		for (address = d->addresses; address != NULL; address = address->next)
 		{
 			/*
@@ -1575,7 +1673,14 @@ daemon_msg_findallif_req(uint8 ver, struct daemon_slpars *pars, uint32 plen)
 #ifdef AF_INET6
 			case AF_INET6:
 #endif
-				plen+= (sizeof(struct rpcap_sockaddr) * 4);
+				CHECK_AND_INCREASE_REPLY_LEN(sizeof(struct rpcap_sockaddr) * 4);
+				if (naddrs == UINT16_MAX) {
+					pcap_strlcpy(errmsgbuf,
+					    "Number of interfaces doesn't fit in 16 bits",
+					    sizeof (errmsgbuf));
+					goto error;
+				}
+				naddrs++;
 				break;
 
 			default:
@@ -1584,21 +1689,34 @@ daemon_msg_findallif_req(uint8 ver, struct daemon_slpars *pars, uint32 plen)
 		}
 	}
 
-	// RPCAP findalldevs command
+	// RPCAP findalldevs reply
 	if (sock_bufferize(NULL, sizeof(struct rpcap_header), NULL,
 	    &sendbufidx, RPCAP_NETBUF_SIZE, SOCKBUF_CHECKONLY, errmsgbuf,
 	    PCAP_ERRBUF_SIZE) == -1)
 		goto error;
 
 	rpcap_createhdr((struct rpcap_header *) sendbuf, ver,
-	    RPCAP_MSG_FINDALLIF_REPLY, nif, plen);
+	    RPCAP_MSG_FINDALLIF_REPLY, nif, replylen);
 
 	// send the interface list
 	for (d = alldevs; d != NULL; d = d->next)
 	{
 		uint16 lname, ldescr;
 
-		findalldevs_if = (struct rpcap_findalldevs_if *) &sendbuf[sendbufidx];
+		// Note: the findalldevs_if entries are *not* neatly
+		// aligned on 4-byte boundaries, because they're
+		// preceded by strings that aren't padded to 4-byte
+		// boundaries, so we cannot just cast output buffer
+		// boundaries to struct rpcap_findalldevs_if pointers
+		// and store into them - we must fill in a structure and
+		// then copy the structure to the buffer, as not all
+		// systems support unaligned access (some, such as
+		// SPARC, crash; others, such as Arm, may just ignore
+		// the lower-order bits).
+		struct rpcap_findalldevs_if dev_if_tmp;
+		char *dev_if_p = &sendbuf[sendbufidx];
+		
+		findalldevs_if = (struct rpcap_findalldevs_if *) &dev_if_tmp;
 
 		if (sock_bufferize(NULL, sizeof(struct rpcap_findalldevs_if), NULL,
 		    &sendbufidx, RPCAP_NETBUF_SIZE, SOCKBUF_CHECKONLY, errmsgbuf, PCAP_ERRBUF_SIZE) == -1)
@@ -1606,10 +1724,18 @@ daemon_msg_findallif_req(uint8 ver, struct daemon_slpars *pars, uint32 plen)
 
 		memset(findalldevs_if, 0, sizeof(struct rpcap_findalldevs_if));
 
-		if (d->description) ldescr = (short) strlen(d->description);
-		else ldescr = 0;
-		if (d->name) lname = (short) strlen(d->name);
-		else lname = 0;
+		/*
+		 * We've already established that the string lengths
+		 * fit in 16 bits.
+		 */
+		if (d->description)
+			ldescr = (uint16) strlen(d->description);
+		else
+			ldescr = 0;
+		if (d->name)
+			lname = (uint16) strlen(d->name);
+		else
+			lname = 0;
 
 		findalldevs_if->desclen = htons(ldescr);
 		findalldevs_if->namelen = htons(lname);
@@ -1634,6 +1760,8 @@ daemon_msg_findallif_req(uint8 ver, struct daemon_slpars *pars, uint32 plen)
 			}
 		}
 		findalldevs_if->naddr = htons(findalldevs_if->naddr);
+
+		memcpy(dev_if_p, &dev_if_tmp, sizeof(struct rpcap_findalldevs_if));
 
 		if (sock_bufferize(d->name, lname, sendbuf, &sendbufidx,
 		    RPCAP_NETBUF_SIZE, SOCKBUF_BUFFERIZE, errmsgbuf,
@@ -1747,8 +1875,13 @@ daemon_msg_open_req(uint8 ver, struct daemon_slpars *pars, uint32 plen,
 	source[nread] = '\0';
 	plen -= nread;
 
-	// XXX - make sure it's *not* a URL; we don't support opening
-	// remote devices here.
+	// Is this a URL rather than a device?
+	// If so, reject it.
+	if (is_url(source))
+	{
+		snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, "Source string refers to a remote device");
+		goto error;
+	}
 
 	// Open the selected device
 	// This is a fake open, since we do that only to get the needed parameters, then we close the device again
@@ -2170,6 +2303,23 @@ daemon_msg_endcap_req(uint8 ver, struct daemon_slpars *pars,
 	return 0;
 }
 
+//
+// We impose a limit on the filter program size, so that, on Windows,
+// where there's only one server process with multiple threads, it's
+// harder to eat all the server address space by sending larger filter
+// programs.  (This isn't an issue on UN*X, where there are multiple
+// server processes, one per client connection.)
+//
+// We pick a value that limits each filter to 64K; that value is twice
+// the in-kernel limit for Linux and 16 times the in-kernel limit for
+// *BSD and macOS.
+//
+// It also prevents an overflow on 32-bit platforms when calculating
+// the total size of the filter program.  (It's not an issue on 64-bit
+// platforms with a 64-bit size_t, as the filter size is 32 bits.)
+//
+#define RPCAP_BPF_MAXINSNS	8192
+
 static int
 daemon_unpackapplyfilter(SOCKET sockctrl, SSL *ctrl_ssl, struct session *session, uint32 *plenp, char *errmsgbuf)
 {
@@ -2199,6 +2349,13 @@ daemon_unpackapplyfilter(SOCKET sockctrl, SSL *ctrl_ssl, struct session *session
 		return -2;
 	}
 
+	if (bf_prog.bf_len > RPCAP_BPF_MAXINSNS)
+	{
+		snprintf(errmsgbuf, PCAP_ERRBUF_SIZE,
+		    "Filter program is larger than the maximum size of %u instructions",
+		    RPCAP_BPF_MAXINSNS);
+		return -2;
+	}
 	bf_insn = (struct bpf_insn *) malloc (sizeof(struct bpf_insn) * bf_prog.bf_len);
 	if (bf_insn == NULL)
 	{
@@ -2279,9 +2436,9 @@ daemon_msg_updatefilter_req(uint8 ver, struct daemon_slpars *pars,
 	// A response is needed, otherwise the other host does not know that everything went well
 	rpcap_createhdr(&header, ver, RPCAP_MSG_UPDATEFILTER_REPLY, 0, 0);
 
-	if (sock_send(pars->sockctrl, pars->ssl, (char *) &header, sizeof (struct rpcap_header), pcap_geterr(session->fp), PCAP_ERRBUF_SIZE))
+	if (sock_send(pars->sockctrl, pars->ssl, (char *) &header, sizeof (struct rpcap_header), errbuf, PCAP_ERRBUF_SIZE))
 	{
-		// That failed; log a messsage and give up.
+		// That failed; log a message and give up.
 		rpcapd_log(LOGPRIO_ERROR, "Send to client failed: %s", errbuf);
 		return -1;
 	}
@@ -2331,7 +2488,7 @@ daemon_msg_setsampling_req(uint8 ver, struct daemon_slpars *pars, uint32 plen,
 
 	if (sock_send(pars->sockctrl, pars->ssl, (char *) &header, sizeof (struct rpcap_header), errbuf, PCAP_ERRBUF_SIZE) == -1)
 	{
-		// That failed; log a messsage and give up.
+		// That failed; log a message and give up.
 		rpcapd_log(LOGPRIO_ERROR, "Send to client failed: %s", errbuf);
 		return -1;
 	}
@@ -2676,19 +2833,25 @@ daemon_seraddr(struct sockaddr_storage *sockaddrin, struct rpcap_sockaddr *socka
 	if (sockaddrin == NULL) return;
 
 	// Warning: we support only AF_INET and AF_INET6
+	//
+	// Note: as noted above, the output structures are not
+	// neatly aligned on 4-byte boundaries, so we must fill
+	// in an aligned structure and then copy it to the output
+	// buffer with memcpy().
 	switch (sockaddrin->ss_family)
 	{
 	case AF_INET:
 		{
 		struct sockaddr_in *sockaddrin_ipv4;
-		struct rpcap_sockaddr_in *sockaddrout_ipv4;
+		struct rpcap_sockaddr_in sockaddrout_ipv4;
 
 		sockaddrin_ipv4 = (struct sockaddr_in *) sockaddrin;
-		sockaddrout_ipv4 = (struct rpcap_sockaddr_in *) sockaddrout;
-		sockaddrout_ipv4->family = htons(RPCAP_AF_INET);
-		sockaddrout_ipv4->port = htons(sockaddrin_ipv4->sin_port);
-		memcpy(&sockaddrout_ipv4->addr, &sockaddrin_ipv4->sin_addr, sizeof(sockaddrout_ipv4->addr));
-		memset(sockaddrout_ipv4->zero, 0, sizeof(sockaddrout_ipv4->zero));
+		
+		sockaddrout_ipv4.family = htons(RPCAP_AF_INET);
+		sockaddrout_ipv4.port = htons(sockaddrin_ipv4->sin_port);
+		memcpy(&sockaddrout_ipv4.addr, &sockaddrin_ipv4->sin_addr, sizeof(sockaddrout_ipv4.addr));
+		memset(sockaddrout_ipv4.zero, 0, sizeof(sockaddrout_ipv4.zero));
+		memcpy(sockaddrout, &sockaddrout_ipv4, sizeof(struct rpcap_sockaddr_in));
 		break;
 		}
 
@@ -2696,15 +2859,16 @@ daemon_seraddr(struct sockaddr_storage *sockaddrin, struct rpcap_sockaddr *socka
 	case AF_INET6:
 		{
 		struct sockaddr_in6 *sockaddrin_ipv6;
-		struct rpcap_sockaddr_in6 *sockaddrout_ipv6;
+		struct rpcap_sockaddr_in6 sockaddrout_ipv6;
 
 		sockaddrin_ipv6 = (struct sockaddr_in6 *) sockaddrin;
-		sockaddrout_ipv6 = (struct rpcap_sockaddr_in6 *) sockaddrout;
-		sockaddrout_ipv6->family = htons(RPCAP_AF_INET6);
-		sockaddrout_ipv6->port = htons(sockaddrin_ipv6->sin6_port);
-		sockaddrout_ipv6->flowinfo = htonl(sockaddrin_ipv6->sin6_flowinfo);
-		memcpy(&sockaddrout_ipv6->addr, &sockaddrin_ipv6->sin6_addr, sizeof(sockaddrout_ipv6->addr));
-		sockaddrout_ipv6->scope_id = htonl(sockaddrin_ipv6->sin6_scope_id);
+		
+		sockaddrout_ipv6.family = htons(RPCAP_AF_INET6);
+		sockaddrout_ipv6.port = htons(sockaddrin_ipv6->sin6_port);
+		sockaddrout_ipv6.flowinfo = htonl(sockaddrin_ipv6->sin6_flowinfo);
+		memcpy(&sockaddrout_ipv6.addr, &sockaddrin_ipv6->sin6_addr, sizeof(sockaddrout_ipv6.addr));
+		sockaddrout_ipv6.scope_id = htonl(sockaddrin_ipv6->sin6_scope_id);
+		memcpy(sockaddrout, &sockaddrout_ipv6, sizeof(struct rpcap_sockaddr_in6));
 		break;
 		}
 #endif
@@ -2717,6 +2881,7 @@ daemon_seraddr(struct sockaddr_storage *sockaddrin, struct rpcap_sockaddr *socka
 */
 void sleep_secs(int secs)
 {
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 #ifdef _WIN32
 	Sleep(secs*1000);
 #else
@@ -2727,6 +2892,7 @@ void sleep_secs(int secs)
 	secs_remaining = secs;
 	while (secs_remaining != 0)
 		secs_remaining = sleep(secs_remaining);
+#endif
 #endif
 }
 
@@ -2905,4 +3071,68 @@ static void session_close(struct session *session)
 		pcap_close(session->fp);
 		session->fp = NULL;
 	}
+}
+
+//
+// Check whether a capture source string is a URL or not.
+// This includes URLs that refer to a local device; a scheme, followed
+// by ://, followed by *another* scheme and ://, is just silly, and
+// anybody who supplies that will get an error.
+//
+static int
+is_url(const char *source)
+{
+	char *colonp;
+
+	/*
+	 * RFC 3986 says:
+	 *
+	 *   URI         = scheme ":" hier-part [ "?" query ] [ "#" fragment ]
+	 *
+	 *   hier-part   = "//" authority path-abempty
+	 *               / path-absolute
+	 *               / path-rootless
+	 *               / path-empty
+	 *
+	 *   authority   = [ userinfo "@" ] host [ ":" port ]
+	 *
+	 *   userinfo    = *( unreserved / pct-encoded / sub-delims / ":" )
+	 *
+	 * Step 1: look for the ":" at the end of the scheme.
+	 * A colon in the source is *NOT* sufficient to indicate that
+	 * this is a URL, as interface names on some platforms might
+	 * include colons (e.g., I think some Solaris interfaces
+	 * might).
+	 */
+	colonp = strchr(source, ':');
+	if (colonp == NULL)
+	{
+		/*
+		 * The source is the device to open.  It's not a URL.
+		 */
+		return (0);
+	}
+
+	/*
+	 * All schemes must have "//" after them, i.e. we only support
+	 * hier-part   = "//" authority path-abempty, not
+	 * hier-part   = path-absolute
+	 * hier-part   = path-rootless
+	 * hier-part   = path-empty
+	 *
+	 * We need that in order to distinguish between a local device
+	 * name that happens to contain a colon and a URI.
+	 */
+	if (strncmp(colonp + 1, "//", 2) != 0)
+	{
+		/*
+		 * The source is the device to open.  It's not a URL.
+		 */
+		return (0);
+	}
+
+	/*
+	 * It's a URL.
+	 */
+	return (1);
 }

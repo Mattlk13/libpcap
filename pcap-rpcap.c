@@ -36,6 +36,7 @@
 #endif
 
 #include "ftmacros.h"
+#include "diag-control.h"
 
 #include <string.h>		/* for strlen(), ... */
 #include <stdlib.h>		/* for malloc(), free(), ... */
@@ -45,6 +46,10 @@
 #include "pcap-int.h"
 #include "rpcap-protocol.h"
 #include "pcap-rpcap.h"
+
+#ifdef _WIN32
+#include "charconv.h"		/* for utf_8_to_acp_truncated() */
+#endif
 
 #ifdef HAVE_OPENSSL
 #include "sslutils.h"
@@ -413,7 +418,11 @@ static int pcap_read_nocb_remote(pcap_t *p, struct pcap_pkthdr *pkt_header, u_ch
 		 */
 		FD_SET(pr->rmt_sockdata, &rfds);
 
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+		retval = 1;
+#else
 		retval = select((int) pr->rmt_sockdata + 1, &rfds, NULL, NULL, &tv);
+#endif
 
 		if (retval == -1)
 		{
@@ -995,11 +1004,10 @@ rpcap_remoteact_getsock(const char *host, int *error, char *errbuf)
 	hints.ai_family = PF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 
-	retval = getaddrinfo(host, "0", &hints, &addrinfo);
+	retval = sock_initaddress(host, "0", &hints, &addrinfo, errbuf,
+	    PCAP_ERRBUF_SIZE);
 	if (retval != 0)
 	{
-		snprintf(errbuf, PCAP_ERRBUF_SIZE, "getaddrinfo() %s",
-		    gai_strerror(retval));
 		*error = 1;
 		return NULL;
 	}
@@ -1438,7 +1446,8 @@ error_nodiscard:
 	}
 #endif
 
-	if ((sockdata) && (sockdata != -1))		/* we can be here because sockdata said 'error' */
+	/* we can be here because sockdata said 'error' */
+	if ((sockdata != 0) && (sockdata != INVALID_SOCKET))
 		sock_close(sockdata, NULL, 0);
 
 	if (!active)
@@ -1479,7 +1488,7 @@ error_nodiscard:
  * This function can be called in two cases:
  * - pcap_startcapture_remote() is called (we have to send the filter
  *   along with the 'start capture' command)
- * - we want to udpate the filter during a capture (i.e. pcap_setfilter()
+ * - we want to update the filter during a capture (i.e. pcap_setfilter()
  *   after the capture has been started)
  *
  * This function serializes the filter into the sending buffer ('sendbuf',
@@ -2160,7 +2169,7 @@ rpcap_setup_session(const char *source, struct pcap_rmtauth *auth,
 	}
 
 	/* Warning: this call can be the first one called by the user. */
-	/* For this reason, we have to initialize the WinSock support. */
+	/* For this reason, we have to initialize the Winsock support. */
 	if (sock_init(errbuf, PCAP_ERRBUF_SIZE) == -1)
 		return -1;
 
@@ -2314,7 +2323,7 @@ pcap_t *pcap_open_rpcap(const char *source, int snaplen, int flags, int read_tim
 	struct rpcap_header header;		/* header of the RPCAP packet */
 	struct rpcap_openreply openreply;	/* open reply message */
 
-	fp = pcap_create_common(errbuf, sizeof (struct pcap_rpcap));
+	fp = PCAP_CREATE_COMMON(errbuf, struct pcap_rpcap);
 	if (fp == NULL)
 	{
 		return NULL;
@@ -2796,7 +2805,7 @@ SOCKET pcap_remoteact_accept_ex(const char *address, const char *port, const cha
 	hints.ai_socktype = SOCK_STREAM;
 
 	/* Warning: this call can be the first one called by the user. */
-	/* For this reason, we have to initialize the WinSock support. */
+	/* For this reason, we have to initialize the Winsock support. */
 	if (sock_init(errbuf, PCAP_ERRBUF_SIZE) == -1)
 		return (SOCKET)-1;
 
@@ -2983,10 +2992,10 @@ int pcap_remoteact_close(const char *host, char *errbuf)
 	hints.ai_family = PF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 
-	retval = getaddrinfo(host, "0", &hints, &addrinfo);
+	retval = sock_initaddress(host, "0", &hints, &addrinfo, errbuf,
+	    PCAP_ERRBUF_SIZE);
 	if (retval != 0)
 	{
-		snprintf(errbuf, PCAP_ERRBUF_SIZE, "getaddrinfo() %s", gai_strerror(retval));
 		return -1;
 	}
 
@@ -3343,7 +3352,9 @@ static void rpcap_msg_err(SOCKET sockctrl, SSL *ssl, uint32 plen, char *remote_e
 		    PCAP_ERRBUF_SIZE) == -1)
 		{
 			// Network error.
+			DIAG_OFF_FORMAT_TRUNCATION
 			snprintf(remote_errbuf, PCAP_ERRBUF_SIZE, "Read of error message from client failed: %s", errbuf);
+			DIAG_ON_FORMAT_TRUNCATION
 			return;
 		}
 
@@ -3351,6 +3362,15 @@ static void rpcap_msg_err(SOCKET sockctrl, SSL *ssl, uint32 plen, char *remote_e
 		 * Null-terminate it.
 		 */
 		remote_errbuf[PCAP_ERRBUF_SIZE - 1] = '\0';
+
+#ifdef _WIN32
+		/*
+		 * If we're not in UTF-8 mode, convert it to the local
+		 * code page.
+		 */
+		if (!pcap_utf_8_mode)
+			utf_8_to_acp_truncated(remote_errbuf);
+#endif
 
 		/*
 		 * Throw away the rest.
@@ -3369,7 +3389,9 @@ static void rpcap_msg_err(SOCKET sockctrl, SSL *ssl, uint32 plen, char *remote_e
 		    PCAP_ERRBUF_SIZE) == -1)
 		{
 			// Network error.
+			DIAG_OFF_FORMAT_TRUNCATION
 			snprintf(remote_errbuf, PCAP_ERRBUF_SIZE, "Read of error message from client failed: %s", errbuf);
+			DIAG_ON_FORMAT_TRUNCATION
 			return;
 		}
 

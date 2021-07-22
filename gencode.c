@@ -48,6 +48,20 @@
 #include "pcap-dos.h"
 #endif
 
+#ifdef HAVE_NET_PFVAR_H
+/*
+ * In NetBSD <net/if.h> includes <net/dlt.h>, which is an older version of
+ * "pcap/dlt.h" with a lower value of DLT_MATCHING_MAX. Include the headers
+ * below before "pcap-int.h", which eventually includes "pcap/dlt.h", which
+ * redefines DLT_MATCHING_MAX from what this version of NetBSD has to what
+ * this version of libpcap has.
+ */
+#include <sys/socket.h>
+#include <net/if.h>
+#include <net/pfvar.h>
+#include <net/if_pflog.h>
+#endif /* HAVE_NET_PFVAR_H */
+
 #include "pcap-int.h"
 
 #include "extract.h"
@@ -67,17 +81,10 @@
 #include "grammar.h"
 #include "scanner.h"
 
-#if defined(linux) && defined(PF_PACKET) && defined(SO_ATTACH_FILTER)
+#if defined(linux)
 #include <linux/types.h>
 #include <linux/if_packet.h>
 #include <linux/filter.h>
-#endif
-
-#ifdef HAVE_NET_PFVAR_H
-#include <sys/socket.h>
-#include <net/if.h>
-#include <net/pfvar.h>
-#include <net/if_pflog.h>
 #endif
 
 #ifndef offsetof
@@ -2927,7 +2934,7 @@ insert_compute_vloffsets(compiler_state_t *cstate, struct block *b)
 	}
 
 	/*
-	 * If there there is no initialization yet and we need variable
+	 * If there is no initialization yet and we need variable
 	 * length offsets for VLAN, initialize them to zero
 	 */
 	if (s == NULL && cstate->is_vlan_vloffset) {
@@ -6080,7 +6087,18 @@ gen_protochain(compiler_state_t *cstate, bpf_u_int32 v, int proto)
 	if (cstate->off_linkpl.is_variable)
 		bpf_error(cstate, "'protochain' not supported with variable length headers");
 
-	cstate->no_optimize = 1; /* this code is not compatible with optimizer yet */
+	/*
+	 * To quote a comment in optimize.c:
+	 *
+	 * "These data structures are used in a Cocke and Shwarz style
+	 * value numbering scheme.  Since the flowgraph is acyclic,
+	 * exit values can be propagated from a node's predecessors
+	 * provided it is uniquely defined."
+	 *
+	 * "Acyclic" means "no backward branches", which means "no
+	 * loops", so we have to turn the optimizer off.
+	 */
+	cstate->no_optimize = 1;
 
 	/*
 	 * s[0] is a dummy entry to protect other BPF insn from damage
@@ -6491,7 +6509,7 @@ gen_proto(compiler_state_t *cstate, bpf_u_int32 v, int proto, int dir)
 		/*NOTREACHED*/
 
 	case Q_ESP:
-		bpf_error(cstate, "'ah proto' is bogus");
+		bpf_error(cstate, "'esp proto' is bogus");
 		/*NOTREACHED*/
 
 	case Q_PIM:
@@ -6947,11 +6965,15 @@ gen_mcode(compiler_state_t *cstate, const char *s1, const char *s2,
 		return (NULL);
 
 	nlen = __pcap_atoin(s1, &n);
+	if (nlen < 0)
+		bpf_error(cstate, "invalid IPv4 address '%s'", s1);
 	/* Promote short ipaddr */
 	n <<= 32 - nlen;
 
 	if (s2 != NULL) {
 		mlen = __pcap_atoin(s2, &m);
+		if (mlen < 0)
+			bpf_error(cstate, "invalid IPv4 address '%s'", s2);
 		/* Promote short ipaddr */
 		m <<= 32 - mlen;
 		if ((n & ~m) != 0)
@@ -7009,8 +7031,11 @@ gen_ncode(compiler_state_t *cstate, const char *s, bpf_u_int32 v, struct qual q)
 		vlen = __pcap_atodn(s, &v);
 		if (vlen == 0)
 			bpf_error(cstate, "malformed decnet address '%s'", s);
-	} else
+	} else {
 		vlen = __pcap_atoin(s, &v);
+		if (vlen < 0)
+			bpf_error(cstate, "invalid IPv4 address '%s'", s);
+	}
 
 	switch (q.addr) {
 
@@ -7131,10 +7156,10 @@ gen_mcode6(compiler_state_t *cstate, const char *s1, const char *s2,
 		bpf_error(cstate, "%s resolved to multiple address", s1);
 	addr = &((struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
 
-	if (sizeof(mask) * 8 < masklen)
-		bpf_error(cstate, "mask length must be <= %u", (unsigned int)(sizeof(mask) * 8));
+	if (masklen > sizeof(mask.s6_addr) * 8)
+		bpf_error(cstate, "mask length must be <= %u", (unsigned int)(sizeof(mask.s6_addr) * 8));
 	memset(&mask, 0, sizeof(mask));
-	memset(&mask, 0xff, masklen / 8);
+	memset(&mask.s6_addr, 0xff, masklen / 8);
 	if (masklen % 8) {
 		mask.s6_addr[masklen / 8] =
 			(0xff << (8 - masklen % 8)) & 0xff;
@@ -8168,6 +8193,53 @@ gen_multicast(compiler_state_t *cstate, int proto)
 	/*NOTREACHED*/
 }
 
+struct block *
+gen_ifindex(compiler_state_t *cstate, int ifindex)
+{
+	register struct block *b0;
+
+	/*
+	 * Catch errors reported by us and routines below us, and return NULL
+	 * on an error.
+	 */
+	if (setjmp(cstate->top_ctx))
+		return (NULL);
+
+	/*
+	 * Only some data link types support ifindex qualifiers.
+	 */
+	switch (cstate->linktype) {
+	case DLT_LINUX_SLL2:
+		/* match packets on this interface */
+		b0 = gen_cmp(cstate, OR_LINKHDR, 4, BPF_W, ifindex);
+		break;
+        default:
+#if defined(linux)
+		/*
+		 * This is Linux; we require PF_PACKET support.
+		 * If this is a *live* capture, we can look at
+		 * special meta-data in the filter expression;
+		 * if it's a savefile, we can't.
+		 */
+		if (cstate->bpf_pcap->rfile != NULL) {
+			/* We have a FILE *, so this is a savefile */
+			bpf_error(cstate, "ifindex not supported on %s when reading savefiles",
+			    pcap_datalink_val_to_description_or_dlt(cstate->linktype));
+			b0 = NULL;
+			/*NOTREACHED*/
+		}
+		/* match ifindex */
+		b0 = gen_cmp(cstate, OR_LINKHDR, SKF_AD_OFF + SKF_AD_IFINDEX, BPF_W,
+		             ifindex);
+#else /* defined(linux) */
+		bpf_error(cstate, "ifindex not supported on %s",
+		    pcap_datalink_val_to_description_or_dlt(cstate->linktype));
+		/*NOTREACHED*/
+#endif /* defined(linux) */
+	}
+	return (b0);
+}
+
 /*
  * Filter on inbound (dir == 0) or outbound (dir == 1) traffic.
  * Outbound traffic is sent by this machine, while inbound traffic is
@@ -8295,9 +8367,9 @@ gen_inbound(compiler_state_t *cstate, int dir)
 		 * with newer capture APIs, allowing it to be saved
 		 * in pcapng files.
 		 */
-#if defined(linux) && defined(PF_PACKET) && defined(SO_ATTACH_FILTER)
+#if defined(linux)
 		/*
-		 * This is Linux with PF_PACKET support.
+		 * This is Linux; we require PF_PACKET support.
 		 * If this is a *live* capture, we can look at
 		 * special meta-data in the filter expression;
 		 * if it's a savefile, we can't.
@@ -8315,11 +8387,11 @@ gen_inbound(compiler_state_t *cstate, int dir)
 			/* to filter on inbound traffic, invert the match */
 			gen_not(b0);
 		}
-#else /* defined(linux) && defined(PF_PACKET) && defined(SO_ATTACH_FILTER) */
+#else /* defined(linux) */
 		bpf_error(cstate, "inbound/outbound not supported on %s",
 		    pcap_datalink_val_to_description_or_dlt(cstate->linktype));
 		/*NOTREACHED*/
-#endif /* defined(linux) && defined(PF_PACKET) && defined(SO_ATTACH_FILTER) */
+#endif /* defined(linux) */
 	}
 	return (b0);
 }
@@ -8871,7 +8943,7 @@ gen_vlan_bpf_extensions(compiler_state_t *cstate, bpf_u_int32 vlan_num,
 
 	/*
 	 * This is tricky. We need to insert the statements updating variable
-	 * parts of offsets before the the traditional TPID and VID tests so
+	 * parts of offsets before the traditional TPID and VID tests so
 	 * that they are called whenever SKF_AD_VLAN_TAG_PRESENT fails but
 	 * we do not want this update to affect those checks. That's why we
 	 * generate both test blocks first and insert the statements updating

@@ -41,8 +41,8 @@ You will need either Bison, Berkeley YACC, or a version of YACC
 compatible with them (if any exist), to build libpcap.  The configure
 script will abort if there isn't any such program.  If you don't have
 any such program, the current version of Bison can be found at
-http://ftp.gnu.org/gnu/bison/ and the current version of Berkeley YACC
-can be found at http://invisible-island.net/byacc/.
+https://ftp.gnu.org/gnu/bison/ and the current version of Berkeley YACC
+can be found at https://invisible-island.net/byacc/.
 
 Sometimes the stock C compiler does not interact well with Flex and
 Bison. The list of problems includes undefined references for alloca.
@@ -188,7 +188,7 @@ If you use SINIX, you should be able to build libpcap from this
 release. It is known to compile and run on SINIX-Y/N 5.42 with the C-DS
 V1.0 or V1.1 compiler. But note that in some releases of SINIX, yacc
 emits incorrect code; if grammar.y fails to compile, change every
-occurence of:
+occurrence of:
 
 	#ifdef YYDEBUG
 
@@ -206,7 +206,7 @@ it appears that completely new code would need to be written to capture
 network traffic.  SCO do not appear to provide tcpdump binaries for
 OpenServer 5 or OpenServer 6 as part of SCO Skunkware:
 
-	http://www.sco.com/skunkware/
+  http://www.sco.com/skunkware/
 
 If you use UnixWare, you might be able to build libpcap from this
 release, or you might not.  We do not have a machine running UnixWare,
@@ -221,7 +221,7 @@ a Sun4, your version of Bison is broken. In any case version 1.16 or
 higher is recommended (1.14 is known to cause problems 1.16 is known to
 work). Either pick up a current version from:
 
-	http://ftp.gnu.org/gnu/bison/
+  https://ftp.gnu.org/gnu/bison/
 
 or hack around it by inserting the lines:
 
@@ -251,7 +251,7 @@ FILES
 	CHANGES		    - description of differences between releases
 	ChmodBPF/*	    - macOS startup item to set ownership and permissions on /dev/bpf*
 	CMakeLists.txt	    - CMake file
-	CONTRIBUTING	    - guidelines for contributing
+	CONTRIBUTING.md	    - guidelines for contributing
 	CREDITS		    - people that have helped libpcap along
 	INSTALL.md	    - this file
 	LICENSE		    - the license under which tcpdump is distributed
@@ -260,7 +260,7 @@ FILES
 	doc/README.aix	    - notes on using libpcap on AIX
 	doc/README.dag	    - notes on using libpcap to capture on Endace DAG devices
 	doc/README.hpux	    - notes on using libpcap on HP-UX
-	doc/README.linux.md - notes on using libpcap on Linux
+	doc/README.linux    - notes on using libpcap on Linux
 	doc/README.macos    - notes on using libpcap on macOS
 	doc/README.septel   - notes on using libpcap to capture on Intel/Septel devices
 	doc/README.sita	    - notes on using libpcap to capture on SITA devices
@@ -306,7 +306,7 @@ FILES
 	pcap/bpf.h	    - BPF definitions
 	pcap/namedb.h	    - public libpcap name database definitions
 	pcap/pcap.h	    - public libpcap definitions
-	pcap/sll.h	    - public definition of DLT_LINUX_SLL header
+	pcap/sll.h	    - public definitions of DLT_LINUX_SLL and DLT_LINUX_SLL2 headers
 	pcap/usb.h	    - public definition of DLT_USB header
 	pcap-bpf.c	    - BSD Packet Filter support
 	pcap-bpf.h	    - header for backwards compatibility

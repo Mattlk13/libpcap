@@ -271,7 +271,7 @@ dnl with the flag in question, and the "treat warnings as errors" flag
 dnl set, and don't add the flag to the first argument if the compile
 dnl fails; this is for warning options cause problems that can't be
 dnl worked around.  If a third argument is supplied, a fourth argument
-dnl should also be supplied; it's a message desribing what the test
+dnl should also be supplied; it's a message describing what the test
 dnl program is checking.
 dnl
 AC_DEFUN(AC_LBL_CHECK_COMPILER_OPT,
@@ -425,14 +425,14 @@ AC_DEFUN(AC_LBL_CHECK_DEPENDENCY_GENERATION_OPT,
 		if AC_RUN_LOG([eval "$CC $ac_lbl_dependency_flag conftest.c >/dev/null 2>&1"]); then
 			AC_MSG_RESULT([yes, with $ac_lbl_dependency_flag])
 			DEPENDENCY_CFLAG="$ac_lbl_dependency_flag"
-			MKDEP='${srcdir}/mkdep'
+			MKDEP='${top_srcdir}/mkdep'
 		else
 			AC_MSG_RESULT([no])
 			#
 			# We can't run mkdep, so have "make depend" do
 			# nothing.
 			#
-			MKDEP='${srcdir}/nomkdep'
+			MKDEP='${top_srcdir}/nomkdep'
 		fi
 		rm -rf conftest*
 	else
@@ -441,7 +441,7 @@ AC_DEFUN(AC_LBL_CHECK_DEPENDENCY_GENERATION_OPT,
 		# We can't run mkdep, so have "make depend" do
 		# nothing.
 		#
-		MKDEP='${srcdir}/nomkdep'
+		MKDEP='${top_srcdir}/nomkdep'
 	fi
 	AC_SUBST(DEPENDENCY_CFLAG)
 	AC_SUBST(MKDEP)
@@ -485,7 +485,7 @@ AC_DEFUN(AC_LBL_SHLIBS_INIT,
 		    ;;
 
 	    freebsd*|netbsd*|openbsd*|dragonfly*|linux*|osf*|haiku*|midipix*)
-	    	    #
+		    #
 		    # Platforms where the linker is the GNU linker
 		    # or accepts command-line arguments like
 		    # those the GNU linker accepts.
@@ -514,7 +514,7 @@ AC_DEFUN(AC_LBL_SHLIBS_INIT,
 
 	    hpux*)
 		    V_SHLIB_CCOPT="$V_SHLIB_CCOPT -fpic"
-	    	    #
+		    #
 		    # XXX - this assumes GCC is using the HP linker,
 		    # rather than the GNU linker, and that the "+h"
 		    # option is used on all HP-UX platforms, both .sl
@@ -522,7 +522,7 @@ AC_DEFUN(AC_LBL_SHLIBS_INIT,
 		    #
 		    V_SONAME_OPT="-Wl,+h,"
 		    #
-		    # By default, directories specifed with -L
+		    # By default, directories specified with -L
 		    # are added to the run-time search path, so
 		    # we don't add them in pcap-config.
 		    #
@@ -583,14 +583,14 @@ AC_DEFUN(AC_LBL_SHLIBS_INIT,
 		    V_SHLIB_OPT="-b"
 		    V_SONAME_OPT="+h "
 		    #
-		    # By default, directories specifed with -L
+		    # By default, directories specified with -L
 		    # are added to the run-time search path, so
 		    # we don't add them in pcap-config.
 		    #
 		    ;;
 
 	    osf*)
-	    	    #
+		    #
 		    # Presumed to be DEC OSF/1, Digital UNIX, or
 		    # Tru64 UNIX.
 		    #
@@ -661,6 +661,48 @@ AC_DEFUN(AC_LBL_C_INLINE,
 	AC_MSG_RESULT(no)
     fi
     AC_DEFINE_UNQUOTED(inline, $ac_cv_lbl_inline, [Define as token for inline if inlining supported])])
+
+FFF
+
+#
+# Test whether we have __atomic_load_n() and __atomic_store_n().
+#
+# We use AC_TRY_LINK because AC_TRY_COMPILE will succeed, as the
+# compiler will just think that those functions are undefined,
+# and perhaps warn about that, but not fail to compile.
+#
+AC_DEFUN(AC_PCAP_C___ATOMICS,
+    [
+	AC_MSG_CHECKING(for __atomic_load_n)
+	AC_CACHE_VAL(ac_cv_have___atomic_load_n,
+	    AC_TRY_LINK([],
+		[
+		    int i = 17;
+		    int j;
+		    j = __atomic_load_n(&i, __ATOMIC_RELAXED);
+		],
+		ac_have___atomic_load_n=yes,
+		ac_have___atomic_load_n=no))
+	AC_MSG_RESULT($ac_have___atomic_load_n)
+	if test $ac_have___atomic_load_n = yes ; then
+	    AC_DEFINE(HAVE___ATOMIC_LOAD_N, 1,
+		[define if __atomic_load_n is supported by the compiler])
+	fi
+
+	AC_MSG_CHECKING(for __atomic_store_n)
+	AC_CACHE_VAL(ac_cv_have___atomic_store_n,
+	    AC_TRY_LINK([],
+		[
+		    int i;
+		    __atomic_store_n(&i, 17, __ATOMIC_RELAXED);
+		],
+		ac_have___atomic_store_n=yes,
+		ac_have___atomic_store_n=no))
+	AC_MSG_RESULT($ac_have___atomic_store_n)
+	if test $ac_have___atomic_store_n = yes ; then
+	    AC_DEFINE(HAVE___ATOMIC_STORE_N, 1,
+		[define if __atomic_store_n is supported by the compiler])
+	fi])
 
 dnl
 dnl If using gcc, make sure we have ANSI ioctl definitions
@@ -1078,7 +1120,7 @@ dnl Check to see whether a particular set of modules exists. Similar to
 dnl PKG_CHECK_MODULES(), but does not set variables or print errors.
 dnl
 dnl Please remember that m4 expands AC_REQUIRE([PKG_PROG_PKG_CONFIG])
-dnl only at the first occurence in configure.ac, so if the first place
+dnl only at the first occurrence in configure.ac, so if the first place
 dnl it's called might be skipped (such as if it is within an "if", you
 dnl have to call PKG_CHECK_EXISTS manually
 AC_DEFUN([PKG_CHECK_EXISTS],
@@ -1173,7 +1215,7 @@ path to pkg-config.
 
 _PKG_TEXT
 
-To get pkg-config, see <http://pkg-config.freedesktop.org/>.])[]dnl
+To get pkg-config, see <https://pkg-config.freedesktop.org/>.])[]dnl
         ])
 else
 	$1[]_CFLAGS=$pkg_cv_[]$1[]_CFLAGS

@@ -48,7 +48,43 @@
 #endif
 
 /*
- * Suppress Flex warnings.
+ * Suppress "enum value not explicitly handled in switch" warnings.
+ * We may have to build on multiple different Windows SDKs, so we
+ * may not be able to include all enum values in a switch, as they
+ * won't necessarily be defined on all the SDKs, and, unlike
+ * #defines, there's no easy way to test whether a given enum has
+ * a given value.  It *could* be done by the configure script or
+ * CMake tests.
+ */
+#if defined(_MSC_VER)
+  #define DIAG_OFF_ENUM_SWITCH \
+    __pragma(warning(push)) \
+    __pragma(warning(disable:4061))
+  #define DIAG_ON_ENUM_SWITCH \
+    __pragma(warning(pop))
+#else
+  #define DIAG_OFF_ENUM_SWITCH
+  #define DIAG_ON_ENUM_SWITCH
+#endif
+
+/*
+ * Suppress "switch statement has only a default case" warnings.
+ * There's a switch in bpf_filter.c that only has additional
+ * cases on Linux.
+ */
+#if defined(_MSC_VER)
+  #define DIAG_OFF_DEFAULT_ONLY_SWITCH \
+    __pragma(warning(push)) \
+    __pragma(warning(disable:4065))
+  #define DIAG_ON_DEFAULT_ONLY_SWITCH \
+    __pragma(warning(pop))
+#else
+  #define DIAG_OFF_DEFAULT_ONLY_SWITCH
+  #define DIAG_ON_DEFAULT_ONLY_SWITCH
+#endif
+
+/*
+ * Suppress Flex, narrowing, and deprecation warnings.
  */
 #if defined(_MSC_VER)
   /*
@@ -72,7 +108,8 @@
    */
   #define DIAG_OFF_NARROWING \
     __pragma(warning(push)) \
-    __pragma(warning(disable:4242))
+    __pragma(warning(disable:4242)) \
+    __pragma(warning(disable:4311))
   #define DIAG_ON_NARROWING \
     __pragma(warning(pop))
 
@@ -84,6 +121,8 @@
     __pragma(warning(disable:4996))
   #define DIAG_ON_DEPRECATION \
     __pragma(warning(pop))
+  #define DIAG_OFF_FORMAT_TRUNCATION
+  #define DIAG_ON_FORMAT_TRUNCATION
 #elif PCAP_IS_AT_LEAST_CLANG_VERSION(2,8)
   /*
    * This is Clang 2.8 or later; we can use "clang diagnostic
@@ -123,6 +162,8 @@
     PCAP_DO_PRAGMA(clang diagnostic ignored "-Wdeprecated-declarations")
   #define DIAG_ON_DEPRECATION \
     PCAP_DO_PRAGMA(clang diagnostic pop)
+  #define DIAG_OFF_FORMAT_TRUNCATION
+  #define DIAG_ON_FORMAT_TRUNCATION
 #elif PCAP_IS_AT_LEAST_GNUC_VERSION(4,6)
   /*
    * This is GCC 4.6 or later, or a compiler claiming to be that.
@@ -151,6 +192,15 @@
     PCAP_DO_PRAGMA(GCC diagnostic ignored "-Wdeprecated-declarations")
   #define DIAG_ON_DEPRECATION \
     PCAP_DO_PRAGMA(GCC diagnostic pop)
+
+  /*
+   * Suppress format-truncation= warnings.
+   */
+  #define DIAG_OFF_FORMAT_TRUNCATION \
+    PCAP_DO_PRAGMA(GCC diagnostic push) \
+    PCAP_DO_PRAGMA(GCC diagnostic ignored "-Wformat-truncation=")
+  #define DIAG_ON_FORMAT_TRUNCATION \
+    PCAP_DO_PRAGMA(GCC diagnostic pop)
 #else
   /*
    * Neither Visual Studio, nor Clang 2.8 or later, nor GCC 4.6 or later
@@ -163,6 +213,8 @@
   #define DIAG_ON_NARROWING
   #define DIAG_OFF_DEPRECATION
   #define DIAG_ON_DEPRECATION
+  #define DIAG_OFF_FORMAT_TRUNCATION
+  #define DIAG_ON_FORMAT_TRUNCATION
 #endif
 
 #ifdef YYBYACC
@@ -217,8 +269,8 @@
   /*
    * Bison.
    *
-   * The generated code may have functions with unreachable code, so
-   * suppress warnings about those.
+   * The generated code may have functions with unreachable code and
+   * switches with only a default case, so suppress warnings about those.
    */
   #if defined(_MSC_VER)
     /*
@@ -228,6 +280,7 @@
      * Suppress some /Wall warnings.
      */
     #define DIAG_OFF_BISON_BYACC \
+      __pragma(warning(disable:4065)) \
       __pragma(warning(disable:4127)) \
       __pragma(warning(disable:4242)) \
       __pragma(warning(disable:4244)) \
